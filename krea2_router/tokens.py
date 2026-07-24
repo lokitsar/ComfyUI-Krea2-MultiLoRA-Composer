@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 KREA2_IM_START_ID = 151644
 KREA2_USER_TOKEN_ID = 872
 KREA2_NEWLINE_TOKEN_ID = 198
@@ -55,10 +54,12 @@ def krea2_template_end(token_ids: list[int]) -> int:
             count_im_start += 1
     if template_end < 0:
         return 0
-    if len(token_ids) > template_end + 3:
-        if token_ids[template_end + 1] == KREA2_USER_TOKEN_ID:
-            if token_ids[template_end + 2] == KREA2_NEWLINE_TOKEN_ID:
-                template_end += 3
+    if (
+        len(token_ids) > template_end + 3
+        and token_ids[template_end + 1] == KREA2_USER_TOKEN_ID
+        and token_ids[template_end + 2] == KREA2_NEWLINE_TOKEN_ID
+    ):
+        template_end += 3
     return template_end
 
 

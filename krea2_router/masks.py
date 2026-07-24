@@ -5,7 +5,6 @@ import torch.nn.functional as F
 
 from .config import Region
 
-
 _COLORS = torch.tensor(
     [
         [0.95, 0.25, 0.30],

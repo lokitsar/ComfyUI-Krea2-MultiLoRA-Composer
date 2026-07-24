@@ -26,7 +26,6 @@ from .krea2_router.sam_masks import assign_detections_to_regions
 from .krea2_router.supersampling import build_supersample_plan, coerce_supersample_plan
 from .krea2_router.tokens import find_krea2_concept_positions
 
-
 LOGGER = logging.getLogger("krea2_multilora_composer")
 
 
@@ -279,7 +278,7 @@ class Krea2CharacterRouter:
                     "matched_modules": len(result.adapters),
                     "skipped_modules": len(result.skipped_keys),
                 }
-                for index, (region, result) in enumerate(zip(active, loaded))
+                for index, (region, result) in enumerate(zip(active, loaded, strict=True))
             ],
             "attention_bias": {
                 "enabled": bool(config.attention_bias and all(token_positions)),

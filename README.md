@@ -8,6 +8,15 @@ hybrid faces, duplicated identities, missing subjects, or one character inheriti
 Krea2 Multi-LoRA Composer assigns each LoRA and subject phrase to an editable region while preserving one shared
 Krea 2 generation.
 
+## Example result
+
+![Two independently routed character LoRAs sharing a balcony scene](docs/assets/multilora-balcony-showcase.png)
+
+Two independently routed character LoRAs rendered in one coherent composition. This is an AI-generated
+demonstration using independently obtained LoRAs; no LoRA weights are included in this repository. The depicted
+characters belong to their respective rights holders. This project is unaffiliated with and is not endorsed by
+those rights holders.
+
 ## What is included
 
 ### Krea2 Multi-LoRA Composer

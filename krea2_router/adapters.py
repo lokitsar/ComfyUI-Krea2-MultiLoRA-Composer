@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import copy
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import torch
-
 
 ROUTEABLE_PREFIXES = ("blocks.", "first", "last.linear", "txtfusion.")
 
@@ -47,7 +46,7 @@ def prepare_adapter(adapter: Any, module: torch.nn.Module, device: torch.device,
     prepared = copy.copy(adapter)
     if hasattr(adapter, "weights"):
         prepared.weights = _move_value(adapter.weights, device, dtype)
-    prepared.shape = tuple(getattr(module, "weight").shape)
+    prepared.shape = tuple(module.weight.shape)
     prepared.is_conv = False
     prepared.conv_dim = 0
     prepared.kw_dict = {}

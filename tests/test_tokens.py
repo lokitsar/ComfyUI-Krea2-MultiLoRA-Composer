@@ -1,8 +1,10 @@
+from typing import ClassVar
+
 from krea2_router.tokens import find_krea2_concept_positions, flatten_token_ids, krea2_template_end
 
 
 class _Decoder:
-    pieces = {
+    pieces: ClassVar[dict[int, str]] = {
         10: "Character Alpha",
         11: " and ",
         12: "Character Beta",

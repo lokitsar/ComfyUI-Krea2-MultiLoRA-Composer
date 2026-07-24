@@ -11,7 +11,6 @@ from .config import Region, RouterConfig
 from .masks import build_region_masks, resize_mask_batch, resolve_mask_overlaps
 from .schedule import sampling_progress, schedule_weight
 
-
 LOGGER = logging.getLogger("krea2_multilora_composer")
 WRAPPER_KEY = "krea2_character_router_v0"
 
@@ -98,7 +97,7 @@ class RouterSession:
         return cached
 
     def _token_mask(self, region_index: int, path: str, sequence: int, ndim: int, output: torch.Tensor) -> torch.Tensor:
-        rows = max(1, int(round(self._image_tokens ** 0.5)))
+        rows = max(1, round(self._image_tokens**0.5))
         cols = max(1, self._image_tokens // rows)
         # Non-square canvases cannot be recovered from token count alone. The wrapper
         # stores the exact grid before hooks are installed.
