@@ -1,0 +1,28 @@
+[project]
+name = "comfyui-krea2-multilora-composer"
+version = "0.4.0"
+description = "Token-aware spatial Multi-LoRA composition and transparent supersampling for Krea 2 in ComfyUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Dylan and contributors" }]
+keywords = ["comfyui", "krea2", "lora", "regional-prompting", "multi-character"]
+dependencies = ["torch", "safetensors"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Repository = "https://github.com/lokitsar/ComfyUI-Krea2-MultiLoRA-Composer"
+
+[tool.comfy]
+PublisherId = "lokitsar"
+DisplayName = "Krea2 Multi-LoRA Composer"
+Icon = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "Character A",
+    "enabled": true,
+    "lora": "character_a_krea2.safetensors",
+    "trigger": "CHAR_A",
+    "prompt": "red-haired woman wearing a dark green coat",
+    "strength": 1.0,
+    "x": 0.05,
+    "y": 0.08,
+    "w": 0.4,
+    "h": 0.84,
+    "start": 0.0,
+    "end": 1.0
+  },
+  {
+    "name": "Character B",
+    "enabled": true,
+    "lora": "character_b_krea2.safetensors",
+    "trigger": "CHAR_B",
+    "prompt": "older man wearing a tailored blue suit",
+    "strength": 1.0,
+    "x": 0.55,
+    "y": 0.08,
+    "w": 0.4,
+    "h": 0.84,
+    "start": 0.0,
+    "end": 1.0
+  }
+]
