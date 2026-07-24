@@ -8,7 +8,7 @@ import torch
 from .adapters import LoadedRegionAdapters, prepare_adapter
 from .attention import construct_box_attention_bias
 from .config import Region, RouterConfig
-from .masks import build_region_masks, resize_mask_batch, resolve_mask_overlaps
+from .masks import build_routing_masks, resize_mask_batch, resolve_mask_overlaps
 from .schedule import sampling_progress, schedule_weight
 
 LOGGER = logging.getLogger("krea2_multilora_composer")
@@ -33,6 +33,8 @@ class RouterSession:
         config: RouterConfig,
         token_positions: list[list[int]] | None = None,
         region_masks: torch.Tensor | None = None,
+        mask_modes: list[str] | None = None,
+        exclusion_regions: list[Region] | None = None,
     ):
         self.patcher = patcher
         self.regions = regions
@@ -40,6 +42,8 @@ class RouterSession:
         self.config = config
         self.token_positions = token_positions or []
         self.region_masks = region_masks
+        self.mask_modes = mask_modes or ["region"] * len(regions)
+        self.exclusion_regions = exclusion_regions
         self._module_map: dict[str, torch.nn.Module] | None = None
         self._prepared: dict[str, list[tuple[int, Any]]] | None = None
         self._mask_cache: dict[tuple, torch.Tensor] = {}
@@ -79,16 +83,26 @@ class RouterSession:
         self._prepared = prepared
 
     def _masks(self, rows: int, cols: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        key = (rows, cols, str(device), dtype, self.config.feather, self.config.overlap_policy)
+        key = (
+            rows,
+            cols,
+            str(device),
+            dtype,
+            self.config.feather,
+            self.config.overlap_policy,
+            tuple(self.mask_modes),
+        )
         cached = self._mask_cache.get(key)
         if cached is None:
             if self.region_masks is None:
-                cached = build_region_masks(
+                cached = build_routing_masks(
                     rows,
                     cols,
                     self.regions,
                     self.config.feather,
                     self.config.overlap_policy,
+                    self.mask_modes,
+                    self.exclusion_regions,
                 ).to(device=device, dtype=dtype)
             else:
                 cached = resize_mask_batch(self.region_masks, rows, cols, device, dtype)
@@ -110,13 +124,21 @@ class RouterSession:
             # FreeFuse-style token routing: an adapter may influence shared text and
             # its own subject phrase, but never a competing character's phrase.
             if self.token_positions:
-                base[: min(sequence, self._text_tokens)] = 1
-                for other_index, positions in enumerate(self.token_positions):
-                    if other_index == region_index:
-                        continue
-                    for position in positions:
-                        if 0 <= position < min(sequence, self._text_tokens):
-                            base[position] = 0
+                text_stop = min(sequence, self._text_tokens)
+                if self.mask_modes[region_index] == "unboxed":
+                    # Keep an unboxed style LoRA off shared scene tokens so its
+                    # text-fusion path cannot restyle boxed characters indirectly.
+                    for position in self.token_positions[region_index]:
+                        if 0 <= position < text_stop:
+                            base[position] = 1
+                else:
+                    base[:text_stop] = 1
+                    for other_index, positions in enumerate(self.token_positions):
+                        if other_index == region_index:
+                            continue
+                        for position in positions:
+                            if 0 <= position < text_stop:
+                                base[position] = 0
             start = self._text_tokens
             stop = min(sequence, start + self._image_tokens)
             base[start:stop] = mask[: max(0, stop - start)]

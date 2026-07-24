@@ -168,6 +168,33 @@ def test_session_separates_competing_loras_on_text_and_image_tokens():
     assert torch.equal(output[0, :, 0], torch.tensor([1.0, 10.0, 1.0, 10.0, 1.0, 10.0]))
 
 
+def test_session_routes_canvas_lora_to_unboxed_image_tokens_only():
+    character = Region("A", True, "a", "A", "", 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 1.0)
+    canvas = Region("Canvas LoRA", True, "style", "", "", 10.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    loaded = [
+        LoadedRegionAdapters("A", "a", 1.0, {"blocks.0.proj": _FakeAdapter()}, [], []),
+        LoadedRegionAdapters("Canvas LoRA", "style", 10.0, {"blocks.0.proj": _FakeAdapter()}, [], []),
+    ]
+    session = RouterSession(
+        None,
+        [character, canvas],
+        loaded,
+        RouterConfig(feather=0.0),
+        token_positions=[[0], []],
+        mask_modes=["region", "unboxed"],
+        exclusion_regions=[character],
+    )
+    output = session.run(
+        _Executor(_FakeKrea()),
+        torch.zeros((1, 16, 4, 4)),
+        torch.tensor([1.0]),
+        torch.zeros((1, 2, 8)),
+        transformer_options={"sigmas": torch.tensor([1.0]), "sample_sigmas": torch.tensor([1.0, 0.0])},
+    )
+    assert torch.equal(output[0, :2, 0], torch.tensor([1.0, 1.0]))
+    assert torch.equal(output[0, 2:, 0], torch.tensor([1.0, 10.0, 1.0, 10.0]))
+
+
 def test_session_injects_attention_bias_into_krea_attention_mask():
     regions = [
         Region("A", True, "a", "A", "", 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 1.0),

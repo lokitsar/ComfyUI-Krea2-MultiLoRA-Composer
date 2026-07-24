@@ -7,10 +7,13 @@ import torch
 
 from .krea2_router.adapters import load_region_adapters
 from .krea2_router.config import (
+    DEFAULT_CANVAS_LORA_JSON,
     DEFAULT_REGIONS_JSON,
     RouterConfig,
     compose_prompt,
+    concept_text_for_canvas,
     concept_text_for_region,
+    parse_canvas_lora,
     parse_regions,
 )
 from .krea2_router.masks import (
@@ -137,6 +140,10 @@ class Krea2CharacterRouter:
                     "FLOAT",
                     {"default": 1.0, "min": 1.0, "max": 2.0, "step": 0.05},
                 ),
+                "canvas_lora_json": (
+                    "STRING",
+                    {"multiline": True, "default": DEFAULT_CANVAS_LORA_JSON},
+                ),
             }
         }
 
@@ -185,32 +192,58 @@ class Krea2CharacterRouter:
         strict,
         debug,
         supersample_scale,
+        canvas_lora_json=DEFAULT_CANVAS_LORA_JSON,
     ):
         regions, warnings = parse_regions(regions_json)
+        canvas_lora, canvas_warnings = parse_canvas_lora(canvas_lora_json)
+        warnings.extend(canvas_warnings)
         enabled = [region for region in regions if region.enabled]
-        active = [region for region in enabled if region.lora not in {"", "None"} and region.strength != 0.0]
-        if strict and not active:
-            raise ValueError("No enabled character region has a selected LoRA")
+        active_characters = [
+            region for region in enabled if region.lora not in {"", "None"} and region.strength != 0.0
+        ]
+        canvas_active = (
+            canvas_lora.enabled
+            and canvas_lora.lora not in {"", "None"}
+            and canvas_lora.strength != 0.0
+        )
+        routing_regions = list(active_characters)
+        mask_modes = ["region"] * len(active_characters)
+        if canvas_active:
+            routing_regions.append(canvas_lora.as_region())
+            mask_modes.append(canvas_lora.coverage)
+        if strict and not routing_regions:
+            raise ValueError("No enabled character or Canvas LoRA has a selected LoRA")
 
-        prompt = compose_prompt(scene_prompt, enabled)
+        prompt = compose_prompt(scene_prompt, enabled, canvas_lora if canvas_active else None)
         tokens = clip.tokenize(prompt)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
 
-        concept_texts = [concept_text_for_region(region) for region in active]
-        token_positions: list[list[int]] = [[] for _ in active]
+        concept_texts = [concept_text_for_region(region) for region in active_characters]
+        concept_required = [True] * len(active_characters)
+        fallbacks = [region.trigger for region in active_characters]
+        if canvas_active:
+            canvas_concept = concept_text_for_canvas(canvas_lora)
+            concept_texts.append(canvas_concept)
+            concept_required.append(bool(canvas_concept))
+            fallbacks.append(canvas_lora.trigger)
+        token_positions: list[list[int]] = [[] for _ in routing_regions]
         used_concepts = concept_texts
         try:
             token_positions, used_concepts = find_krea2_concept_positions(
                 clip,
                 tokens,
                 concept_texts,
-                [region.trigger for region in active],
+                fallbacks,
             )
         except (AttributeError, TypeError, ValueError) as exc:
             if strict:
-                raise ValueError(f"Could not align character phrases to Krea2 tokens: {exc}") from exc
+                raise ValueError(f"Could not align routed LoRA phrases to Krea2 tokens: {exc}") from exc
             warnings.append(f"Token routing disabled: {exc}")
-        missing_tokens = [active[index].name for index, positions in enumerate(token_positions) if not positions]
+        missing_tokens = [
+            routing_regions[index].name
+            for index, positions in enumerate(token_positions)
+            if concept_required[index] and not positions
+        ]
         if missing_tokens:
             message = "No Krea2 token positions found for: " + ", ".join(missing_tokens)
             if strict:
@@ -225,7 +258,7 @@ class Krea2CharacterRouter:
             debug=bool(debug),
         )
         loaded = []
-        for region in active:
+        for region in routing_regions:
             result = load_region_adapters(model, region, strict=bool(strict))
             loaded.append(result)
             if result.skipped_keys:
@@ -239,7 +272,15 @@ class Krea2CharacterRouter:
 
         patched = model.clone()
         if loaded:
-            session = RouterSession(patched, active, loaded, config, token_positions=token_positions)
+            session = RouterSession(
+                patched,
+                routing_regions,
+                loaded,
+                config,
+                token_positions=token_positions,
+                mask_modes=mask_modes,
+                exclusion_regions=enabled,
+            )
             install_router_wrapper(patched, session)
 
         preview_rows = max(16, int(height) // 8)
@@ -255,7 +296,7 @@ class Krea2CharacterRouter:
         supersample_plan = build_supersample_plan(width, height, supersample_scale)
         supersampling = supersample_plan.as_dict()
         diagnostics = {
-            "version": "0.3.1",
+            "version": "0.5.0",
             "engine": "box_guided_token_routing_attention_bias",
             "prompt": prompt,
             "canvas": {"width": int(width), "height": int(height)},
@@ -268,15 +309,16 @@ class Krea2CharacterRouter:
                     "strength": region.strength,
                     "box": list(region.box),
                     "schedule": [region.start, region.end],
+                    "mask_mode": mask_modes[index],
                     "concept_text": used_concepts[index],
                     "token_positions": token_positions[index],
                     "matched_modules": len(result.adapters),
                     "skipped_modules": len(result.skipped_keys),
                 }
-                for index, (region, result) in enumerate(zip(active, loaded, strict=True))
+                for index, (region, result) in enumerate(zip(routing_regions, loaded, strict=True))
             ],
             "attention_bias": {
-                "enabled": bool(config.attention_bias and all(token_positions)),
+                "enabled": bool(config.attention_bias and any(token_positions)),
                 "negative": config.negative_bias,
                 "positive": config.positive_bias,
                 "blocks": "all",
@@ -294,6 +336,15 @@ class Krea2CharacterRouter:
                 "overlap_policy": config.overlap_policy,
                 "schedule_softness": config.schedule_softness,
                 "strict": config.strict,
+            },
+            "canvas_lora": {
+                "enabled": canvas_lora.enabled,
+                "lora": canvas_lora.lora,
+                "trigger": canvas_lora.trigger,
+                "description": canvas_lora.prompt,
+                "strength": canvas_lora.strength,
+                "coverage": canvas_lora.coverage,
+                "schedule": {"start": canvas_lora.start, "end": canvas_lora.end},
             },
             "characters": [
                 {
@@ -458,7 +509,7 @@ class Krea2SupersampledKSampler:
         actual_width = int(working_image.shape[2])
 
         diagnostics = {
-            "version": "0.4.0",
+            "version": "0.5.0",
             "seed": int(seed),
             "steps": int(steps),
             "cfg": float(cfg),

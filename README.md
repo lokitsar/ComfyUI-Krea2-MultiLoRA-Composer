@@ -26,6 +26,7 @@ those rights holders.
 - Exact aspect-ratio placement canvas with draggable and resizable regions
 - Per-character trigger, description, strength, and denoising schedule
 - Spatial adapter-delta routing: a character LoRA contributes zero outside its region
+- Optional Canvas LoRA for the unboxed area or the entire image
 - Subject-token isolation and regional attention bias to reduce identity collisions
 - Shared scene prompting for coherent lighting, interaction, props, and background
 - Portable JSON scene export, file import, and clipboard import
@@ -96,8 +97,27 @@ Connect:
 6. Drag each colored region around its intended character. Drag the lower-right handle to resize it.
 7. Keep regions separated initially. Use the smallest region that still covers the intended character.
 8. Start at LoRA strength `1.0`, schedule `0.0–1.0`, feather `0.08`, and overlap policy `nearest`.
+9. Optionally open **Canvas LoRA** to give the environment a separate LoRA or rendering style.
 
 The Composer creates the final positive prompt automatically and exposes it as an output.
+
+## Canvas LoRA
+
+Canvas LoRA is optional and disabled by default. It uses the same searchable selector, trigger, description,
+strength, and denoising schedule as a character row, but it does not have a draggable box.
+
+- **Unboxed area only** builds the Canvas LoRA mask as `1 − union(character masks)`. The Canvas LoRA contributes
+  to scenery outside every enabled character box and fades beneath the character LoRAs at feathered edges.
+- **Entire canvas** applies the Canvas LoRA across the full image as a base style while the character LoRAs remain
+  regionally routed on top.
+
+Use **Unboxed area only** when a style or environment LoRA should not directly alter the boxed characters. Keep
+character boxes reasonably tight: scenery located inside a box is intentionally excluded from the Canvas LoRA.
+Use **Entire canvas** when consistent rendering style matters more than strict style isolation.
+
+LoRA contributions are combined during one diffusion pass rather than generated as sequential image layers.
+A strongly character-trained Canvas LoRA can still try to introduce its subject into the unboxed scene; its
+training quality, captions, trigger, strength, and seed continue to matter.
 
 ## Transparent supersampling
 
@@ -141,6 +161,12 @@ Use each character description for:
 - The character's interaction with shared objects
 - The rendering style belonging only to that character
 
+Use the Canvas LoRA description for:
+
+- The Canvas LoRA's exact trigger, when it has one
+- Environment-specific rendering style
+- Texture, medium, or setting language that should stay outside the character boxes
+
 Krea 2 Turbo should be prompted positively. Do not place negative-prompt instructions in the positive scene or
 character fields.
 
@@ -150,6 +176,7 @@ character fields.
 
 - Target canvas and internal supersampling plan
 - Scene prompt and composed positive prompt
+- Optional Canvas LoRA settings and coverage mode
 - LoRA paths, triggers, descriptions, and strengths
 - Normalized and pixel placement coordinates
 - Character schedules and router controls
@@ -169,7 +196,8 @@ The Composer combines three mechanisms:
 3. **Attention bias** encourages each subject phrase to attend to its own image region and suppresses it outside
    that region.
 
-The base model remains responsible for the unboxed scene and for global coherence.
+The base model remains responsible for global coherence. When enabled, Canvas LoRA adds a separately routed
+adapter contribution to either the unboxed scene or the entire image.
 
 ## Limitations
 
@@ -179,6 +207,10 @@ The base model remains responsible for the unboxed scene and for global coherenc
   every base-model interaction local.
 - LoRA quality, trigger accuracy, training captions, seed, pose, and face size still affect likeness.
 - Heavy region overlap creates genuine ambiguity. `nearest` divides overlapping tokens by region center.
+- Unboxed Canvas LoRA cannot affect scenery behind a character when that scenery occupies the same rectangular
+  box. Tight boxes reduce this excluded area.
+- A Canvas LoRA trained primarily on one character may introduce that character or its features into the
+  background even when the boxed identities remain isolated.
 - Supersampling improves working resolution but does not guarantee identity accuracy and increases VRAM use.
 
 ## Backward compatibility
@@ -189,6 +221,8 @@ The visible project and node names changed in version `0.4.0`, but the internal 
 - `Krea2SupersampledKSampler`
 
 Existing workflows and exported scene JSON therefore continue to load.
+Version `0.5.0` appends an optional hidden Canvas LoRA configuration widget. Older workflows load it disabled,
+and older `krea2_character_router_share_v1` scene files import without modification.
 
 ## Development
 

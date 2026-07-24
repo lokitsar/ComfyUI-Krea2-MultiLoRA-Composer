@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-krea2-multilora-composer"
-version = "0.4.0"
+version = "0.5.0"
 description = "Token-aware spatial Multi-LoRA composition and transparent supersampling for Krea 2 in ComfyUI."
 readme = "README.md"
 requires-python = ">=3.10"

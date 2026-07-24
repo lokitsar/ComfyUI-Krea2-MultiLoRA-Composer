@@ -3,6 +3,7 @@ import { api } from "../../scripts/api.js";
 
 const NODE_TYPE = "Krea2CharacterRouter";
 const JSON_WIDGET = "regions_json";
+const CANVAS_LORA_WIDGET = "canvas_lora_json";
 const COLORS = ["#f04452", "#338cff", "#35d873", "#f1b42f", "#995de9", "#2cced0", "#ef61b4", "#b2cb3f"];
 let loraNames = ["None"];
 
@@ -23,6 +24,15 @@ function installStyles() {
     .k2cr-scene { margin-bottom:7px; border:1px solid #46464f; border-radius:6px; padding:6px; background:#202027; }
     .k2cr-scene summary { cursor:pointer; color:#ccc; font-weight:650; user-select:none; }
     .k2cr-scene textarea { height:68px; min-height:42px; max-height:220px; margin-top:6px; resize:vertical; }
+    .k2cr-canvas-lora { margin-bottom:7px; border:1px solid #5a4b70; border-radius:6px; padding:6px; background:#24202b; }
+    .k2cr-canvas-lora summary { cursor:pointer; color:#d7c7ed; font-weight:650; user-select:none; }
+    .k2cr-canvas-body { margin-top:7px; }
+    .k2cr-canvas-help { margin:0 0 7px; color:#aaa; font-size:11px; line-height:1.35; }
+    .k2cr-enable-label { flex-direction:row !important; align-items:center; gap:6px !important; margin-bottom:7px; font-size:11px !important; }
+    .k2cr-enable-label input { width:auto; }
+    .k2cr-canvas-grid { display:grid; grid-template-columns:1fr 145px 90px 70px; gap:5px; }
+    .k2cr-canvas-grid .wide { grid-column:1 / -1; }
+    .k2cr-canvas-schedule { display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:5px; }
     .k2cr-stage { width:100%; border:1px solid #555; border-radius:6px; display:block; background:#111318;
       touch-action:none; cursor:crosshair; }
     .k2cr-rows { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
@@ -105,6 +115,52 @@ function writeRegions(node, regions) {
   node.setDirtyCanvas?.(true, true);
 }
 
+function defaultCanvasLora() {
+  return {
+    enabled: false,
+    lora: "None",
+    trigger: "",
+    prompt: "",
+    strength: 1.0,
+    coverage: "unboxed",
+    start: 0.0,
+    end: 1.0,
+  };
+}
+
+function normalizeCanvasLora(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const coverage = ["unboxed", "global"].includes(source.coverage) ? source.coverage : "unboxed";
+  return {
+    enabled: source.enabled === true,
+    lora: String(source.lora || "None"),
+    trigger: String(source.trigger || ""),
+    prompt: String(source.prompt ?? source.description ?? ""),
+    strength: number(source.strength, 1.0),
+    coverage,
+    start: Math.max(0, Math.min(1, number(source.start ?? source.schedule?.start, 0.0))),
+    end: Math.max(0, Math.min(1, number(source.end ?? source.schedule?.end, 1.0))),
+  };
+}
+
+function readCanvasLora(node) {
+  try {
+    return normalizeCanvasLora(JSON.parse(widget(node, CANVAS_LORA_WIDGET)?.value || "{}"));
+  } catch (_) {
+    return defaultCanvasLora();
+  }
+}
+
+function writeCanvasLora(node, canvasLora) {
+  const item = widget(node, CANVAS_LORA_WIDGET);
+  if (!item) return;
+  const normalized = normalizeCanvasLora(canvasLora);
+  item.value = JSON.stringify(normalized, null, 2);
+  if (item.inputEl) item.inputEl.value = item.value;
+  item.callback?.(item.value);
+  node.setDirtyCanvas?.(true, true);
+}
+
 function defaultRegion(index) {
   const offset = (index % 4) * 0.12;
   return {
@@ -171,6 +227,11 @@ function normalizeImportedScene(rawText) {
   const supersampling = payload.supersampling && typeof payload.supersampling === "object"
     ? payload.supersampling
     : {};
+  const canvasLora = normalizeCanvasLora(
+    payload.canvas_lora && typeof payload.canvas_lora === "object"
+      ? payload.canvas_lora
+      : payload.background_lora,
+  );
   const overlapPolicy = ["nearest", "normalize", "allow"].includes(router.overlap_policy)
     ? router.overlap_policy
     : "nearest";
@@ -212,6 +273,7 @@ function normalizeImportedScene(rawText) {
     scheduleSoftness: Math.max(0, Math.min(0.25, number(router.schedule_softness, 0.04))),
     strict: router.strict !== false,
     supersampleScale: Math.max(1, Math.min(2, number(supersampling.scale, 1))),
+    canvasLora,
     regions,
   };
 }
@@ -399,6 +461,7 @@ function attachPanel(node) {
   installStyles();
   hideWidget(node, JSON_WIDGET);
   hideWidget(node, "scene_prompt");
+  hideWidget(node, CANVAS_LORA_WIDGET);
   const root = document.createElement("div");
   root.className = "k2cr";
   const scene = document.createElement("details");
@@ -409,6 +472,13 @@ function attachPanel(node) {
   const scenePrompt = document.createElement("textarea");
   scenePrompt.placeholder = "Describe the shared setting, action, composition, lighting, and style…";
   scene.append(sceneSummary, scenePrompt);
+  const canvasLoraPanel = document.createElement("details");
+  canvasLoraPanel.className = "k2cr-canvas-lora";
+  const canvasLoraSummary = document.createElement("summary");
+  canvasLoraSummary.textContent = "Canvas LoRA (optional)";
+  const canvasLoraBody = document.createElement("div");
+  canvasLoraBody.className = "k2cr-canvas-body";
+  canvasLoraPanel.append(canvasLoraSummary, canvasLoraBody);
   const toolbar = document.createElement("div");
   toolbar.className = "k2cr-toolbar";
   const add = document.createElement("button"); add.textContent = "+ Character";
@@ -430,7 +500,7 @@ function attachPanel(node) {
   toolbar.append(countLabel, applyCount, add, reset, refresh, importJson, pasteJson, fitContent, compact, hint);
   const canvas = document.createElement("canvas"); canvas.className = "k2cr-stage";
   const rows = document.createElement("div"); rows.className = "k2cr-rows";
-  root.append(scene, toolbar, fileInput, canvas, rows);
+  root.append(scene, canvasLoraPanel, toolbar, fileInput, canvas, rows);
   let selected = -1;
 
   const resizeNodeToContent = (useCompactHeight) => {
@@ -471,6 +541,98 @@ function attachPanel(node) {
     item.callback?.(value);
   };
 
+  const renderCanvasLora = () => {
+    canvasLoraBody.replaceChildren();
+    const state = readCanvasLora(node);
+    canvasLoraSummary.textContent = state.enabled
+      ? `Canvas LoRA — ${state.coverage === "global" ? "entire canvas" : "unboxed only"}`
+      : "Canvas LoRA (optional)";
+
+    const help = document.createElement("p");
+    help.className = "k2cr-canvas-help";
+    help.textContent = "Unboxed only applies this LoRA to the inverse of every enabled character box. "
+      + "Entire canvas behaves like a base style LoRA underneath the routed characters.";
+
+    const enabled = makeInput("checkbox", "", (input) => {
+      state.enabled = input.checked;
+      writeCanvasLora(node, state);
+      canvasLoraSummary.textContent = state.enabled
+        ? `Canvas LoRA — ${state.coverage === "global" ? "entire canvas" : "unboxed only"}`
+        : "Canvas LoRA (optional)";
+    });
+    enabled.checked = state.enabled;
+
+    const loraPicker = makeSearchableLoraPicker(state.lora, (selectedLora) => {
+      state.lora = selectedLora;
+      writeCanvasLora(node, state);
+    });
+    const coverage = document.createElement("select");
+    [
+      ["unboxed", "Unboxed area only"],
+      ["global", "Entire canvas"],
+    ].forEach(([value, title]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = title;
+      coverage.append(option);
+    });
+    coverage.value = state.coverage;
+    coverage.addEventListener("change", () => {
+      state.coverage = coverage.value;
+      writeCanvasLora(node, state);
+      canvasLoraSummary.textContent = state.enabled
+        ? `Canvas LoRA — ${state.coverage === "global" ? "entire canvas" : "unboxed only"}`
+        : "Canvas LoRA (optional)";
+    });
+    const trigger = makeInput("text", state.trigger, (input) => {
+      state.trigger = input.value;
+      writeCanvasLora(node, state);
+    });
+    const strength = makeInput("number", state.strength, (input) => {
+      state.strength = number(input.value, 1);
+      writeCanvasLora(node, state);
+    });
+    strength.step = "0.05";
+    strength.min = "-4";
+    strength.max = "4";
+    const prompt = document.createElement("textarea");
+    prompt.className = "k2cr-description";
+    prompt.value = state.prompt;
+    prompt.placeholder = "Describe the environment or style this LoRA should contribute…";
+    prompt.addEventListener("input", () => {
+      state.prompt = prompt.value;
+      writeCanvasLora(node, state);
+    });
+    const start = makeInput("number", state.start.toFixed(3), (input) => {
+      state.start = Math.max(0, Math.min(1, number(input.value, state.start)));
+      writeCanvasLora(node, state);
+    });
+    const end = makeInput("number", state.end.toFixed(3), (input) => {
+      state.end = Math.max(0, Math.min(1, number(input.value, state.end)));
+      writeCanvasLora(node, state);
+    });
+    for (const control of [start, end]) {
+      control.step = "0.01";
+      control.min = "0";
+      control.max = "1";
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "k2cr-canvas-grid";
+    grid.append(
+      label("Canvas LoRA", loraPicker),
+      label("Coverage", coverage),
+      label("Trigger", trigger),
+      label("Strength", strength),
+      label("Description / style instruction", prompt, "wide"),
+    );
+    const schedule = document.createElement("div");
+    schedule.className = "k2cr-canvas-schedule";
+    schedule.append(label("Start", start), label("End", end));
+    const enabledLabel = label("Enable Canvas LoRA", enabled, "k2cr-enable-label");
+    canvasLoraBody.append(help, enabledLabel, grid, schedule);
+  };
+
   const applyImportedScene = (rawText) => {
     // Normalize and validate everything before mutating the current node.
     const imported = normalizeImportedScene(rawText);
@@ -482,14 +644,18 @@ function attachPanel(node) {
     setWidgetValue("overlap_policy", imported.overlapPolicy);
     setWidgetValue("schedule_softness", imported.scheduleSoftness);
     setWidgetValue("strict", imported.strict);
+    writeCanvasLora(node, imported.canvasLora);
     scenePrompt.value = imported.scenePrompt;
     selected = -1;
     writeRegions(node, imported.regions);
+    renderCanvasLora();
     renderRows();
 
     const missing = [...new Set(
-      imported.regions
-        .map((region) => region.lora)
+      [
+        ...imported.regions.map((region) => region.lora),
+        imported.canvasLora.lora,
+      ]
         .filter((name) => name && name !== "None" && !loraNames.includes(name)),
     )];
     if (missing.length) {
@@ -659,9 +825,12 @@ function attachPanel(node) {
     setValue: () => {},
   });
   node.resizable = true;
-  node.__k2crRoot = root; node.__k2crRender = renderRows;
+  node.__k2crRoot = root;
+  node.__k2crRender = renderRows;
+  node.__k2crRenderCanvas = renderCanvasLora;
   hookDimensionWidget(node, "width", () => drawStage(node, canvas, selected));
   hookDimensionWidget(node, "height", () => drawStage(node, canvas, selected));
+  renderCanvasLora();
   renderRows();
   window.requestAnimationFrame(() => {
     const minimum = node.computeSize?.()?.[1] || 560;
@@ -691,6 +860,8 @@ app.registerExtension({
         normalizeSupersampleScale(this);
         hideWidget(this, JSON_WIDGET);
         hideWidget(this, "scene_prompt");
+        hideWidget(this, CANVAS_LORA_WIDGET);
+        this.__k2crRenderCanvas?.();
         this.__k2crRender?.();
       });
       return result;

@@ -8,10 +8,10 @@ or provide reference-image conditioning.
 
 ## Runtime pipeline
 
-1. Parse and validate normalized character regions.
+1. Parse and validate normalized character regions and the optional Canvas LoRA.
 2. Resolve each LoRA through ComfyUI's Krea-specific model key map.
-3. Compose the scene and character descriptions into one positive prompt.
-4. Match each complete character phrase to Krea 2's post-template conditioning-token positions.
+3. Compose the scene, optional Canvas phrase, and character descriptions into one positive prompt.
+4. Match each routed phrase to Krea 2's post-template conditioning-token positions.
 5. Clone the model and install one keyed diffusion-model wrapper.
 6. Map adapter target paths to live modules on the first model call.
 7. Route adapter contributions by image region and subject-token ownership.
@@ -36,6 +36,14 @@ Regions are stored in normalized image coordinates. At runtime, masks are resize
 derived from the latent and model patch size. Feathering occurs inward from each region edge, so direct adapter
 contributions remain exactly zero outside the assigned region.
 
+The optional Canvas LoRA supports two mask modes:
+
+- `unboxed`: the complement of the union of all enabled character masks
+- `global`: a mask of ones covering the entire token grid
+
+The complement is calculated after character feathering, producing a shared transition where character and
+Canvas contributions exchange strength rather than forming a hard rectangular seam.
+
 When regions overlap:
 
 - `nearest` assigns each overlapping token to its closest region center.
@@ -44,9 +52,12 @@ When regions overlap:
 
 ## Subject-token isolation
 
-Each character's text-fusion adapter contribution is retained on shared text and its own phrase while being
-suppressed on competing character phrases. This prevents global LoRA stacking from giving both identities the
-same subject-token ownership.
+Each routed adapter's text-fusion contribution is retained on shared text and its own phrase while being
+suppressed on competing routed phrases. In `unboxed` mode, the Canvas LoRA is more restrictive: its text-fusion
+contribution is kept only on its own Canvas phrase and removed from shared scene tokens. A triggerless,
+description-free Canvas LoRA therefore has no text-fusion contribution, while its spatial adapter targets still
+operate outside the character boxes. `global` mode retains shared-text behavior. This prevents global LoRA
+stacking from giving multiple identities the same subject-token ownership.
 
 ## Attention bias
 
@@ -71,7 +82,8 @@ so the final output benefits from high-resolution denoising without requiring a 
 
 The public project was renamed in version `0.4.0`. Internal ComfyUI identifiers and the
 `krea2_character_router_share_v1` scene format remain unchanged so existing workflows and shared scenes continue
-to load.
+to load. Version `0.5.0` appends the optional Canvas LoRA widget and adds an optional `canvas_lora` object to
+scene JSON without changing the format identifier.
 
 ## Planned extensions
 

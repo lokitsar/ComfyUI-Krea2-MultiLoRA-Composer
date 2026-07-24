@@ -40,6 +40,20 @@ DEFAULT_REGIONS_JSON = json.dumps(
     indent=2,
 )
 
+DEFAULT_CANVAS_LORA_JSON = json.dumps(
+    {
+        "enabled": False,
+        "lora": "None",
+        "trigger": "",
+        "prompt": "",
+        "strength": 1.0,
+        "coverage": "unboxed",
+        "start": 0.0,
+        "end": 1.0,
+    },
+    indent=2,
+)
+
 
 def _finite_float(value: Any, default: float) -> float:
     try:
@@ -79,6 +93,34 @@ class Region:
     @property
     def center(self) -> tuple[float, float]:
         return self.x + self.w / 2.0, self.y + self.h / 2.0
+
+
+@dataclass(frozen=True)
+class CanvasLora:
+    enabled: bool
+    lora: str
+    trigger: str
+    prompt: str
+    strength: float
+    coverage: str
+    start: float
+    end: float
+
+    def as_region(self) -> Region:
+        return Region(
+            name="Canvas LoRA",
+            enabled=self.enabled,
+            lora=self.lora,
+            trigger=self.trigger,
+            prompt=self.prompt,
+            strength=self.strength,
+            x=0.0,
+            y=0.0,
+            w=1.0,
+            h=1.0,
+            start=self.start,
+            end=self.end,
+        )
 
 
 @dataclass(frozen=True)
@@ -192,6 +234,43 @@ def parse_regions(regions_json: str) -> tuple[list[Region], list[str]]:
     return regions, warnings
 
 
+def parse_canvas_lora(canvas_lora_json: str) -> tuple[CanvasLora, list[str]]:
+    """Parse the optional full-canvas or inverse-character LoRA configuration."""
+    try:
+        raw = json.loads(canvas_lora_json or DEFAULT_CANVAS_LORA_JSON)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"canvas_lora_json is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("canvas_lora_json must be a JSON object")
+
+    coverage = _clean_text(raw.get("coverage", "unboxed")).casefold()
+    warnings: list[str] = []
+    if coverage not in {"unboxed", "global"}:
+        warnings.append(f"Canvas LoRA has unknown coverage mode {coverage!r}; using unboxed")
+        coverage = "unboxed"
+
+    canvas = CanvasLora(
+        enabled=bool(raw.get("enabled", False)),
+        lora=_clean_text(raw.get("lora", raw.get("lora_name", "None"))) or "None",
+        trigger=_clean_text(raw.get("trigger")),
+        prompt=_clean_text(raw.get("prompt", raw.get("description", ""))),
+        strength=_finite_float(raw.get("strength", 1.0), 1.0),
+        coverage=coverage,
+        start=_clamp(_finite_float(raw.get("start", 0.0), 0.0), 0.0, 1.0),
+        end=_clamp(_finite_float(raw.get("end", 1.0), 1.0), 0.0, 1.0),
+    )
+    if canvas.enabled:
+        if canvas.lora in {"", "None"}:
+            warnings.append("Canvas LoRA is enabled but no LoRA is selected")
+        if canvas.start >= canvas.end:
+            warnings.append(
+                f"Canvas LoRA has an empty denoising schedule ({canvas.start:.2f}-{canvas.end:.2f})"
+            )
+        if abs(canvas.strength) > 2.0:
+            warnings.append(f"Canvas LoRA uses a high strength ({canvas.strength:.2f})")
+    return canvas, warnings
+
+
 def _location_phrase(region: Region) -> str:
     cx, cy = region.center
     horizontal = "left" if cx < 0.40 else "right" if cx > 0.60 else "center"
@@ -207,8 +286,24 @@ def concept_text_for_region(region: Region) -> str:
     return character
 
 
-def compose_prompt(scene_prompt: str, regions: list[Region]) -> str:
+def concept_text_for_canvas(canvas_lora: CanvasLora) -> str:
+    """Return the optional Canvas LoRA phrase without inventing a spatial subject."""
+    concept = canvas_lora.prompt
+    if canvas_lora.trigger and canvas_lora.trigger.casefold() not in concept.casefold():
+        concept = f"{canvas_lora.trigger}, {concept}" if concept else canvas_lora.trigger
+    return concept
+
+
+def compose_prompt(
+    scene_prompt: str,
+    regions: list[Region],
+    canvas_lora: CanvasLora | None = None,
+) -> str:
     parts = [_clean_text(scene_prompt)]
+    if canvas_lora is not None and canvas_lora.enabled:
+        canvas_concept = concept_text_for_canvas(canvas_lora)
+        if canvas_concept:
+            parts.append(canvas_concept)
     for region in regions:
         if not region.enabled:
             continue

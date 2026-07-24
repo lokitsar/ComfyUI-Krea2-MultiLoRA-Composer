@@ -5,6 +5,7 @@ import torch
 from krea2_router.config import parse_regions
 from krea2_router.masks import (
     build_region_masks,
+    build_routing_masks,
     masks_to_preview,
     resize_mask_batch,
     resolve_mask_overlaps,
@@ -42,3 +43,53 @@ def test_external_masks_resize_and_resolve_overlap():
     resolved = resolve_mask_overlaps(resized, regions, "nearest")
     assert resolved.shape == (2, 4, 6)
     assert int((resolved > 0).sum(dim=0).max()) == 1
+
+
+def test_unboxed_canvas_mask_is_inverse_of_all_enabled_character_boxes():
+    characters = _regions()
+    canvas = parse_regions(json.dumps([
+        {"name": "Canvas LoRA", "lora": "style", "x": 0, "y": 0, "w": 1, "h": 1},
+    ]))[0][0]
+    routed = build_routing_masks(
+        32,
+        32,
+        [characters[0], canvas],
+        feather=0.0,
+        mask_modes=["region", "unboxed"],
+        exclusion_regions=characters,
+    )
+    exclusions = build_region_masks(32, 32, characters, feather=0.0, overlap_policy="allow")
+    assert torch.equal(routed[1], 1.0 - exclusions.amax(dim=0))
+    assert torch.count_nonzero(routed[1] * exclusions.amax(dim=0)) == 0
+
+
+def test_global_canvas_mask_covers_character_boxes_too():
+    character = _regions()[0]
+    canvas = parse_regions(json.dumps([
+        {"name": "Canvas LoRA", "lora": "style", "x": 0, "y": 0, "w": 1, "h": 1},
+    ]))[0][0]
+    routed = build_routing_masks(
+        8,
+        8,
+        [character, canvas],
+        feather=0.0,
+        mask_modes=["region", "global"],
+        exclusion_regions=[character],
+    )
+    assert torch.all(routed[1] == 1.0)
+
+
+def test_unboxed_canvas_and_single_character_exchange_strength_across_feather():
+    character = _regions()[0]
+    canvas = parse_regions(json.dumps([
+        {"name": "Canvas LoRA", "lora": "style", "x": 0, "y": 0, "w": 1, "h": 1},
+    ]))[0][0]
+    routed = build_routing_masks(
+        32,
+        32,
+        [character, canvas],
+        feather=0.2,
+        mask_modes=["region", "unboxed"],
+        exclusion_regions=[character],
+    )
+    assert torch.allclose(routed[0] + routed[1], torch.ones((32, 32)))

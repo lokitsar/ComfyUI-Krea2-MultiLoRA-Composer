@@ -30,9 +30,8 @@ def test_router_and_supersampled_sampler_are_registered():
         "INT",
         "KREA2_SUPERSAMPLE_PLAN",
     )
-    assert list(module.NODE_CLASS_MAPPINGS["Krea2CharacterRouter"].INPUT_TYPES()["required"])[-1] == (
-        "supersample_scale"
-    )
+    required = list(module.NODE_CLASS_MAPPINGS["Krea2CharacterRouter"].INPUT_TYPES()["required"])
+    assert required[-2:] == ["supersample_scale", "canvas_lora_json"]
     sampler = module.NODE_CLASS_MAPPINGS["Krea2SupersampledKSampler"]
     assert sampler.RETURN_TYPES == ("IMAGE", "LATENT", "IMAGE", "STRING")
     assert sampler.RETURN_NAMES == ("image", "latent", "working_image", "diagnostics")

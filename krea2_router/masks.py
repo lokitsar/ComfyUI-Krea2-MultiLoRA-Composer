@@ -59,6 +59,57 @@ def build_region_masks(
     return resolve_mask_overlaps(masks, regions, overlap_policy)
 
 
+def build_routing_masks(
+    rows: int,
+    cols: int,
+    regions: list[Region],
+    feather: float,
+    overlap_policy: str = "nearest",
+    mask_modes: list[str] | None = None,
+    exclusion_regions: list[Region] | None = None,
+) -> torch.Tensor:
+    """Build ordinary, unboxed-complement, and global masks in routing order."""
+    if rows < 1 or cols < 1:
+        raise ValueError("mask grid must be at least 1x1")
+    if not regions:
+        return torch.zeros((0, rows, cols), dtype=torch.float32)
+
+    modes = mask_modes or ["region"] * len(regions)
+    if len(modes) != len(regions):
+        raise ValueError("mask_modes must match the number of routing regions")
+    if any(mode not in {"region", "unboxed", "global"} for mode in modes):
+        raise ValueError("mask_modes may only contain region, unboxed, or global")
+
+    routed = torch.zeros((len(regions), rows, cols), dtype=torch.float32)
+    region_indices = [index for index, mode in enumerate(modes) if mode == "region"]
+    if region_indices:
+        region_masks = build_region_masks(
+            rows,
+            cols,
+            [regions[index] for index in region_indices],
+            feather,
+            overlap_policy,
+        )
+        for mask_index, region_index in enumerate(region_indices):
+            routed[region_index] = region_masks[mask_index]
+
+    exclusions = exclusion_regions
+    if exclusions is None:
+        exclusions = [regions[index] for index in region_indices]
+    if exclusions:
+        exclusion_masks = build_region_masks(rows, cols, exclusions, feather, "allow")
+        occupied = exclusion_masks.amax(dim=0).clamp(0.0, 1.0)
+    else:
+        occupied = torch.zeros((rows, cols), dtype=torch.float32)
+
+    for index, mode in enumerate(modes):
+        if mode == "unboxed":
+            routed[index] = 1.0 - occupied
+        elif mode == "global":
+            routed[index] = 1.0
+    return routed
+
+
 def resolve_mask_overlaps(
     masks: torch.Tensor,
     regions: list[Region] | tuple[Region, ...],
@@ -106,7 +157,7 @@ def resize_mask_batch(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """Resize a mask batch while retaining soft SAM boundaries."""
+    """Resize a mask batch while retaining soft boundaries."""
 
     target = masks.to(device=device or masks.device, dtype=dtype or masks.dtype)
     return F.interpolate(target.unsqueeze(1), size=(rows, cols), mode="bilinear", align_corners=False).squeeze(1)
