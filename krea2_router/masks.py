@@ -99,49 +99,6 @@ def resolve_mask_overlaps(
     return masks
 
 
-def prepare_external_masks(
-    masks: torch.Tensor,
-    expected: int,
-    grow: int = 0,
-    feather: int = 0,
-) -> torch.Tensor:
-    """Validate and softly expand/erode a ComfyUI MASK batch for identity routing."""
-
-    if not torch.is_tensor(masks):
-        raise TypeError("identity_masks must be a torch tensor")
-    if masks.ndim == 2:
-        masks = masks.unsqueeze(0)
-    if masks.ndim != 3:
-        raise ValueError("identity_masks must have shape [characters, height, width]")
-    if masks.shape[0] != expected:
-        raise ValueError(
-            f"identity mask batch has {masks.shape[0]} masks but the route plan has {expected} characters; "
-            "stack one SAM3 mask per character in Character A, B, C order"
-        )
-    result = torch.nan_to_num(masks.detach().float(), nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-    radius = abs(int(grow))
-    if radius:
-        kernel = radius * 2 + 1
-        source = result.unsqueeze(1)
-        if grow > 0:
-            source = F.max_pool2d(source, kernel, stride=1, padding=radius)
-        else:
-            source = 1.0 - F.max_pool2d(1.0 - source, kernel, stride=1, padding=radius)
-        result = source.squeeze(1)
-
-    blur_radius = max(0, int(feather))
-    if blur_radius:
-        sigma = max(0.5, blur_radius / 2.0)
-        axis = torch.arange(-blur_radius, blur_radius + 1, device=result.device, dtype=result.dtype)
-        kernel_1d = torch.exp(-(axis.square()) / (2.0 * sigma * sigma))
-        kernel_1d /= kernel_1d.sum()
-        source = F.pad(result.unsqueeze(1), (blur_radius,) * 4, mode="replicate")
-        source = F.conv2d(source, kernel_1d.view(1, 1, 1, -1))
-        source = F.conv2d(source, kernel_1d.view(1, 1, -1, 1))
-        result = source.squeeze(1)
-    return result.clamp(0.0, 1.0)
-
-
 def resize_mask_batch(
     masks: torch.Tensor,
     rows: int,

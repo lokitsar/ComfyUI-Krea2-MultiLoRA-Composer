@@ -6,7 +6,6 @@ from krea2_router.config import parse_regions
 from krea2_router.masks import (
     build_region_masks,
     masks_to_preview,
-    prepare_external_masks,
     resize_mask_batch,
     resolve_mask_overlaps,
 )
@@ -34,26 +33,6 @@ def test_preview_is_comfy_image_shape():
     preview = masks_to_preview(build_region_masks(32, 48, _regions(), .08, "nearest"))
     assert preview.shape == (1, 32, 48, 3)
     assert 0 <= float(preview.min()) <= float(preview.max()) <= 1
-
-
-def test_external_mask_batch_count_must_match_characters():
-    masks = torch.zeros((1, 16, 16))
-    try:
-        prepare_external_masks(masks, expected=2)
-    except ValueError as exc:
-        assert "Character A, B, C order" in str(exc)
-    else:
-        raise AssertionError("mask count mismatch should fail")
-
-
-def test_external_mask_grow_and_feather_create_soft_foreground_boundary():
-    masks = torch.zeros((1, 17, 17))
-    masks[0, 8, 8] = 1
-    prepared = prepare_external_masks(masks, expected=1, grow=2, feather=2)
-    assert prepared.shape == masks.shape
-    assert float(prepared[0, 8, 8]) > 0.9
-    assert 0.0 < float(prepared[0, 8, 5]) < 1.0
-    assert float(prepared[0, 0, 0]) == 0.0
 
 
 def test_external_masks_resize_and_resolve_overlap():
