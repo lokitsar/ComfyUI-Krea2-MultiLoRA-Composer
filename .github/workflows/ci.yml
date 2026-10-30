@@ -15,7 +15,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install torch pytest ruff
       - run: ruff check .
       - run: python -m pytest -q
+      - run: node --test tests/test_canvas_ui.cjs

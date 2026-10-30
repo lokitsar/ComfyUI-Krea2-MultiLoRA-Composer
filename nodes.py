@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 
 import torch
 
@@ -13,7 +14,7 @@ from .krea2_router.config import (
     compose_prompt,
     concept_text_for_canvas,
     concept_text_for_region,
-    parse_canvas_lora,
+    parse_canvas_loras,
     parse_regions,
 )
 from .krea2_router.masks import (
@@ -195,37 +196,39 @@ class Krea2CharacterRouter:
         canvas_lora_json=DEFAULT_CANVAS_LORA_JSON,
     ):
         regions, warnings = parse_regions(regions_json)
-        canvas_lora, canvas_warnings = parse_canvas_lora(canvas_lora_json)
+        canvas_loras, canvas_warnings = parse_canvas_loras(canvas_lora_json)
         warnings.extend(canvas_warnings)
         enabled = [region for region in regions if region.enabled]
         active_characters = [
             region for region in enabled if region.lora not in {"", "None"} and region.strength != 0.0
         ]
-        canvas_active = (
-            canvas_lora.enabled
-            and canvas_lora.lora not in {"", "None"}
-            and canvas_lora.strength != 0.0
-        )
+        active_canvases = [
+            (index, canvas) for index, canvas in enumerate(canvas_loras)
+            if canvas.enabled and canvas.lora not in {"", "None"} and canvas.strength != 0.0
+        ]
         routing_regions = list(active_characters)
         mask_modes = ["region"] * len(active_characters)
-        if canvas_active:
-            routing_regions.append(canvas_lora.as_region())
-            mask_modes.append(canvas_lora.coverage)
+        for index, canvas in active_canvases:
+            region = canvas.as_region()
+            if len(canvas_loras) > 1:
+                region = replace(region, name=f"Canvas LoRA {index + 1}")
+            routing_regions.append(region)
+            mask_modes.append(canvas.coverage)
         if strict and not routing_regions:
             raise ValueError("No enabled character or Canvas LoRA has a selected LoRA")
 
-        prompt = compose_prompt(scene_prompt, enabled, canvas_lora if canvas_active else None)
+        prompt = compose_prompt(scene_prompt, enabled, [canvas for _, canvas in active_canvases])
         tokens = clip.tokenize(prompt)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
 
         concept_texts = [concept_text_for_region(region) for region in active_characters]
         concept_required = [True] * len(active_characters)
         fallbacks = [region.trigger for region in active_characters]
-        if canvas_active:
-            canvas_concept = concept_text_for_canvas(canvas_lora)
+        for _, canvas in active_canvases:
+            canvas_concept = concept_text_for_canvas(canvas)
             concept_texts.append(canvas_concept)
             concept_required.append(bool(canvas_concept))
-            fallbacks.append(canvas_lora.trigger)
+            fallbacks.append(canvas.trigger)
         token_positions: list[list[int]] = [[] for _ in routing_regions]
         used_concepts = concept_texts
         try:
@@ -325,6 +328,18 @@ class Krea2CharacterRouter:
             },
             "warnings": warnings,
         }
+        shared_canvases = [
+            {
+                "enabled": canvas.enabled,
+                "lora": canvas.lora,
+                "trigger": canvas.trigger,
+                "description": canvas.prompt,
+                "strength": canvas.strength,
+                "coverage": canvas.coverage,
+                "schedule": {"start": canvas.start, "end": canvas.end},
+            }
+            for canvas in canvas_loras
+        ]
         share_prompt = {
             "format": "krea2_character_router_share_v1",
             "canvas": {"width": int(width), "height": int(height)},
@@ -337,15 +352,9 @@ class Krea2CharacterRouter:
                 "schedule_softness": config.schedule_softness,
                 "strict": config.strict,
             },
-            "canvas_lora": {
-                "enabled": canvas_lora.enabled,
-                "lora": canvas_lora.lora,
-                "trigger": canvas_lora.trigger,
-                "description": canvas_lora.prompt,
-                "strength": canvas_lora.strength,
-                "coverage": canvas_lora.coverage,
-                "schedule": {"start": canvas_lora.start, "end": canvas_lora.end},
-            },
+            "canvas_loras": shared_canvases,
+            # Older scene importers can still recover the first Canvas LoRA.
+            "canvas_lora": shared_canvases[0] if shared_canvases else {"enabled": False},
             "characters": [
                 {
                     "name": region.name,

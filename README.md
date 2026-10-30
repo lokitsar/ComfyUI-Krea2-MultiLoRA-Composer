@@ -26,7 +26,7 @@ those rights holders.
 - Exact aspect-ratio placement canvas with draggable and resizable regions
 - Per-character trigger, description, strength, and denoising schedule
 - Spatial adapter-delta routing: a character LoRA contributes zero outside its region
-- Optional Canvas LoRA for the unboxed area or the entire image
+- Multiple optional Canvas LoRAs, each covering the unboxed area or the entire image
 - Subject-token isolation and regional attention bias to reduce identity collisions
 - Shared scene prompting for coherent lighting, interaction, props, and background
 - Portable JSON scene export, file import, and clipboard import
@@ -97,14 +97,21 @@ Connect:
 6. Drag each colored region around its intended character. Drag the lower-right handle to resize it.
 7. Keep regions separated initially. Use the smallest region that still covers the intended character.
 8. Start at LoRA strength `1.0`, schedule `0.0–1.0`, feather `0.08`, and overlap policy `nearest`.
-9. Optionally open **Canvas LoRA** to give the environment a separate LoRA or rendering style.
+9. Optionally configure **Canvas LoRA** for an environment or rendering style. Use **+ Canvas** to add more.
 
 The Composer creates the final positive prompt automatically and exposes it as an output.
 
+The placement grid follows the effective **width** and **height** inputs, including connections from ComfyUI's
+**Resolution Selector** (also through reroutes) and numeric primitive nodes. Changing the selector's aspect ratio,
+megapixels, or rounding multiple updates the grid's proportions and resolution label without resetting character
+boxes. Resizing the Composer also redraws the grid at its new display width.
+
 ## Canvas LoRA
 
-Canvas LoRA is optional and disabled by default. It uses the same searchable selector, trigger, description,
-strength, and denoising schedule as a character row, but it does not have a draggable box.
+Canvas LoRAs are optional; the initial entry is disabled by default. Use **+ Canvas** to add as many style or
+environment LoRAs as needed, with no fixed count limit. Each entry has its own searchable selector, enable
+checkbox, trigger, description, strength, coverage, and denoising schedule, but no draggable box. **Remove**
+deletes only that Canvas entry, and all Canvas entries may be removed.
 
 - **Unboxed area only** builds the Canvas LoRA mask as `1 − union(character masks)`. The Canvas LoRA contributes
   to scenery outside every enabled character box and fades beneath the character LoRAs at feathered edges.
@@ -114,6 +121,10 @@ strength, and denoising schedule as a character row, but it does not have a drag
 Use **Unboxed area only** when a style or environment LoRA should not directly alter the boxed characters. Keep
 character boxes reasonably tight: scenery located inside a box is intentionally excluded from the Canvas LoRA.
 Use **Entire canvas** when consistent rendering style matters more than strict style isolation.
+
+Coverage is independent for each Canvas LoRA: multiple **Entire canvas** styles can be combined with
+**Unboxed area only** environment LoRAs. Their contributions add together, so start with modest strengths.
+Every additional LoRA increases memory usage and sampling cost.
 
 LoRA contributions are combined during one diffusion pass rather than generated as sequential image layers.
 A strongly character-trained Canvas LoRA can still try to introduce its subject into the unboxed scene; its
@@ -176,7 +187,7 @@ character fields.
 
 - Target canvas and internal supersampling plan
 - Scene prompt and composed positive prompt
-- Optional Canvas LoRA settings and coverage mode
+- Optional `canvas_loras` array with every Canvas LoRA's settings and coverage mode
 - LoRA paths, triggers, descriptions, and strengths
 - Normalized and pixel placement coordinates
 - Character schedules and router controls
@@ -185,6 +196,9 @@ character fields.
 Use **Import JSON** for a saved file or **Paste JSON** for clipboard text. Existing
 `krea2_character_router_share_v1` files remain supported; the format identifier is intentionally unchanged for
 backward compatibility.
+Imports accept both the new `canvas_loras` array and the legacy `canvas_lora` object. When both are present,
+the array takes precedence, including an empty array. Exports also include the first Canvas LoRA in the legacy
+field for older importers; older versions cannot restore additional Canvas LoRAs.
 
 ## How routing works
 
@@ -196,7 +210,7 @@ The Composer combines three mechanisms:
 3. **Attention bias** encourages each subject phrase to attend to its own image region and suppresses it outside
    that region.
 
-The base model remains responsible for global coherence. When enabled, Canvas LoRA adds a separately routed
+The base model remains responsible for global coherence. Each enabled Canvas LoRA adds a separately routed
 adapter contribution to either the unboxed scene or the entire image.
 
 ## Limitations
@@ -223,6 +237,8 @@ The visible project and node names changed in version `0.4.0`, but the internal 
 Existing workflows and exported scene JSON therefore continue to load.
 Version `0.5.0` appends an optional hidden Canvas LoRA configuration widget. Older workflows load it disabled,
 and older `krea2_character_router_share_v1` scene files import without modification.
+The same hidden widget now accepts a list of Canvas LoRAs as well as the original single-object value, without
+changing widget order or internal node identifiers.
 
 ## Development
 
@@ -230,6 +246,7 @@ and older `krea2_character_router_share_v1` scene files import without modificat
 python -m pip install -e ".[dev]"
 python -m pytest -q
 ruff check .
+node --test tests/test_canvas_ui.cjs
 ```
 
 The routing implementation is tested independently from CUDA inference. Real-image results should still be

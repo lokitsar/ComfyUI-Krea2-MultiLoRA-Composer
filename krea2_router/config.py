@@ -242,13 +242,19 @@ def parse_canvas_lora(canvas_lora_json: str) -> tuple[CanvasLora, list[str]]:
         raise ValueError(f"canvas_lora_json is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError("canvas_lora_json must be a JSON object")
+    return _canvas_lora_from_item(raw)
 
+
+def _canvas_lora_from_item(raw: dict[str, Any]) -> tuple[CanvasLora, list[str]]:
     coverage = _clean_text(raw.get("coverage", "unboxed")).casefold()
     warnings: list[str] = []
     if coverage not in {"unboxed", "global"}:
         warnings.append(f"Canvas LoRA has unknown coverage mode {coverage!r}; using unboxed")
         coverage = "unboxed"
 
+    schedule = raw.get("schedule")
+    if not isinstance(schedule, dict):
+        schedule = {}
     canvas = CanvasLora(
         enabled=bool(raw.get("enabled", False)),
         lora=_clean_text(raw.get("lora", raw.get("lora_name", "None"))) or "None",
@@ -256,8 +262,8 @@ def parse_canvas_lora(canvas_lora_json: str) -> tuple[CanvasLora, list[str]]:
         prompt=_clean_text(raw.get("prompt", raw.get("description", ""))),
         strength=_finite_float(raw.get("strength", 1.0), 1.0),
         coverage=coverage,
-        start=_clamp(_finite_float(raw.get("start", 0.0), 0.0), 0.0, 1.0),
-        end=_clamp(_finite_float(raw.get("end", 1.0), 1.0), 0.0, 1.0),
+        start=_clamp(_finite_float(raw.get("start", schedule.get("start", 0.0)), 0.0), 0.0, 1.0),
+        end=_clamp(_finite_float(raw.get("end", schedule.get("end", 1.0)), 1.0), 0.0, 1.0),
     )
     if canvas.enabled:
         if canvas.lora in {"", "None"}:
@@ -269,6 +275,29 @@ def parse_canvas_lora(canvas_lora_json: str) -> tuple[CanvasLora, list[str]]:
         if abs(canvas.strength) > 2.0:
             warnings.append(f"Canvas LoRA uses a high strength ({canvas.strength:.2f})")
     return canvas, warnings
+
+
+def parse_canvas_loras(canvas_lora_json: str) -> tuple[list[CanvasLora], list[str]]:
+    """Accept multiple Canvas LoRAs or a legacy single-object configuration."""
+    try:
+        raw = json.loads(canvas_lora_json or DEFAULT_CANVAS_LORA_JSON)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"canvas_lora_json is not valid JSON: {exc}") from exc
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("canvas_lora_json must be a JSON object or array of objects")
+
+    canvases: list[CanvasLora] = []
+    warnings: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"canvas_lora_json entry {index + 1} must be a JSON object")
+        canvas, item_warnings = _canvas_lora_from_item(item)
+        canvases.append(canvas)
+        prefix = f"Canvas LoRA {index + 1}: " if len(raw) > 1 else ""
+        warnings.extend(prefix + warning for warning in item_warnings)
+    return canvases, warnings
 
 
 def _location_phrase(region: Region) -> str:
@@ -297,11 +326,14 @@ def concept_text_for_canvas(canvas_lora: CanvasLora) -> str:
 def compose_prompt(
     scene_prompt: str,
     regions: list[Region],
-    canvas_lora: CanvasLora | None = None,
+    canvas_lora: CanvasLora | list[CanvasLora] | None = None,
 ) -> str:
     parts = [_clean_text(scene_prompt)]
-    if canvas_lora is not None and canvas_lora.enabled:
-        canvas_concept = concept_text_for_canvas(canvas_lora)
+    canvases = [canvas_lora] if isinstance(canvas_lora, CanvasLora) else canvas_lora or []
+    for canvas in canvases:
+        if not canvas.enabled:
+            continue
+        canvas_concept = concept_text_for_canvas(canvas)
         if canvas_concept:
             parts.append(canvas_concept)
     for region in regions:
