@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from krea2_router.adapters import LoadedRegionAdapters
@@ -193,6 +194,34 @@ def test_session_routes_canvas_lora_to_unboxed_image_tokens_only():
     )
     assert torch.equal(output[0, :2, 0], torch.tensor([1.0, 1.0]))
     assert torch.equal(output[0, 2:, 0], torch.tensor([1.0, 10.0, 1.0, 10.0]))
+
+
+@pytest.mark.parametrize("overlap_policy", ["nearest", "normalize", "allow"])
+def test_session_stacks_multiple_global_and_unboxed_canvas_loras(overlap_policy):
+    regions = [
+        Region("A", True, "a", "A", "", 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 1.0),
+        Region("Canvas 1", True, "paint", "P", "", 10.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0),
+        Region("Canvas 2", True, "grain", "G", "", 100.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0),
+        Region("Canvas 3", True, "scenery", "", "", 1000.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0),
+    ]
+    session = RouterSession(
+        None, regions,
+        [LoadedRegionAdapters(r.name, r.lora, r.strength, {"blocks.0.proj": _FakeAdapter()}, [], [])
+         for r in regions],
+        RouterConfig(feather=0.0, overlap_policy=overlap_policy),
+        token_positions=[[0], [1], [2], []],
+        mask_modes=["region", "global", "global", "unboxed"],
+        exclusion_regions=[regions[0]],
+    )
+    output = session.run(
+        _Executor(_FakeKrea()),
+        torch.zeros((1, 16, 4, 4)),
+        torch.tensor([1.0]),
+        torch.zeros((1, 3, 8)),
+        transformer_options={"sigmas": torch.tensor([1.0]), "sample_sigmas": torch.tensor([1.0, 0.0])},
+    )
+    assert torch.equal(output[0, :3, 0], torch.tensor([1.0, 10.0, 100.0]))
+    assert torch.equal(output[0, 3:, 0], torch.tensor([111.0, 1110.0, 111.0, 1110.0]))
 
 
 def test_session_injects_attention_bias_into_krea_attention_mask():

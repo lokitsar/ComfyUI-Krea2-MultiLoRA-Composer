@@ -8,9 +8,9 @@ or provide reference-image conditioning.
 
 ## Runtime pipeline
 
-1. Parse and validate normalized character regions and the optional Canvas LoRA.
+1. Parse and validate normalized character regions and the optional list of Canvas LoRAs.
 2. Resolve each LoRA through ComfyUI's Krea-specific model key map.
-3. Compose the scene, optional Canvas phrase, and character descriptions into one positive prompt.
+3. Compose the scene, enabled Canvas phrases, and character descriptions into one positive prompt.
 4. Match each routed phrase to Krea 2's post-template conditioning-token positions.
 5. Clone the model and install one keyed diffusion-model wrapper.
 6. Map adapter target paths to live modules on the first model call.
@@ -36,13 +36,15 @@ Regions are stored in normalized image coordinates. At runtime, masks are resize
 derived from the latent and model patch size. Feathering occurs inward from each region edge, so direct adapter
 contributions remain exactly zero outside the assigned region.
 
-The optional Canvas LoRA supports two mask modes:
+Each optional Canvas LoRA independently supports two mask modes:
 
 - `unboxed`: the complement of the union of all enabled character masks
 - `global`: a mask of ones covering the entire token grid
 
 The complement is calculated after character feathering, producing a shared transition where character and
 Canvas contributions exchange strength rather than forming a hard rectangular seam.
+Canvas masks do not participate in character overlap arbitration: multiple global or unboxed adapter
+contributions add together without splitting or normalizing their coverage against one another.
 
 When regions overlap:
 
@@ -84,6 +86,9 @@ The public project was renamed in version `0.4.0`. Internal ComfyUI identifiers 
 `krea2_character_router_share_v1` scene format remain unchanged so existing workflows and shared scenes continue
 to load. Version `0.5.0` appends the optional Canvas LoRA widget and adds an optional `canvas_lora` object to
 scene JSON without changing the format identifier.
+The same widget also accepts an array of Canvas LoRA objects, retaining support for its original single-object
+value. Scene exports include all entries in `canvas_loras` and retain `canvas_lora` for the first entry.
+Importers prefer the array when present, including when it is empty.
 
 ## Planned extensions
 

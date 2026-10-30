@@ -1,11 +1,14 @@
 import json
 
+import pytest
+
 from krea2_router.config import (
     DEFAULT_CANVAS_LORA_JSON,
     compose_prompt,
     concept_text_for_canvas,
     concept_text_for_region,
     parse_canvas_lora,
+    parse_canvas_loras,
     parse_regions,
 )
 
@@ -79,3 +82,47 @@ def test_canvas_lora_allows_triggerless_style_adapters():
     assert not warnings
     assert concept_text_for_canvas(canvas) == "hand-painted scenery"
     assert canvas.as_region().box == (0.0, 0.0, 1.0, 1.0)
+
+
+def test_canvas_loras_accepts_legacy_object_and_empty_list():
+    legacy, warnings = parse_canvas_loras(DEFAULT_CANVAS_LORA_JSON)
+    assert legacy == [parse_canvas_lora(DEFAULT_CANVAS_LORA_JSON)[0]]
+    assert not warnings
+    assert parse_canvas_loras("[]") == ([], [])
+
+
+def test_canvas_loras_composes_multiple_styles_before_characters():
+    regions, _ = parse_regions(json.dumps([{"lora": "person", "trigger": "PERSON"}]))
+    canvases, warnings = parse_canvas_loras(json.dumps([
+        {"enabled": True, "lora": "paint", "trigger": "PAINT", "coverage": "global"},
+        {"enabled": True, "lora": "texture", "prompt": "paper grain", "coverage": "unboxed"},
+        {"enabled": False, "lora": "disabled", "trigger": "DISABLED"},
+    ]))
+    assert not warnings
+    assert [canvas.coverage for canvas in canvases] == ["global", "unboxed", "unboxed"]
+    prompt = compose_prompt("A city", regions, canvases)
+    assert prompt.index("PAINT") < prompt.index("paper grain") < prompt.index("PERSON")
+    assert "DISABLED" not in prompt
+
+
+def test_canvas_loras_has_no_fixed_count_limit():
+    canvases, warnings = parse_canvas_loras(json.dumps([
+        {"enabled": True, "lora": f"style-{index}", "coverage": "global"} for index in range(8)
+    ]))
+    assert len(canvases) == 8
+    assert not warnings
+
+
+@pytest.mark.parametrize("value", ['null', '"style"', '[{}, null]', '[[]]', '{'])
+def test_canvas_loras_rejects_malformed_input(value):
+    with pytest.raises(ValueError, match="canvas_lora_json"):
+        parse_canvas_loras(value)
+
+
+def test_canvas_loras_warnings_identify_the_entry():
+    _, warnings = parse_canvas_loras(json.dumps([
+        {"enabled": True, "lora": "valid", "coverage": "global"},
+        {"enabled": True, "coverage": "invalid", "start": 1, "end": 0, "strength": 3},
+    ]))
+    assert len(warnings) == 4
+    assert all(warning.startswith("Canvas LoRA 2:") for warning in warnings)
