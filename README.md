@@ -101,6 +101,11 @@ Connect:
 
 The Composer creates the final positive prompt automatically and exposes it as an output.
 
+The placement grid follows the effective **width** and **height** inputs, including connections from ComfyUI's
+**Resolution Selector** (also through reroutes) and numeric primitive nodes. Changing the selector's aspect ratio,
+megapixels, or rounding multiple updates the grid's proportions and resolution label without resetting character
+boxes. Resizing the Composer also redraws the grid at its new display width.
+
 ## Canvas LoRA
 
 Canvas LoRAs are optional; the initial entry is disabled by default. Use **+ Canvas** to add as many style or

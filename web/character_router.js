@@ -397,10 +397,61 @@ function label(text, control, className = "") {
   return element;
 }
 
+function resolutionSelectorSize(node) {
+  const ratio = String(widget(node, "aspect_ratio")?.value ?? "").match(/^(\d+):(\d+)/);
+  const megapixels = Number(widget(node, "megapixels")?.value);
+  const multiple = Number(widget(node, "multiple")?.value);
+  if (!ratio || !Number.isFinite(megapixels) || megapixels <= 0
+      || !Number.isFinite(multiple) || multiple <= 0 || !Number(ratio[1]) || !Number(ratio[2])) {
+    throw new Error("The connected Resolution Selector has invalid resolution settings.");
+  }
+  const scale = Math.sqrt(megapixels * 1024 * 1024 / (Number(ratio[1]) * Number(ratio[2])));
+  const roundDimension = (value) => {
+    const units = value / multiple;
+    const floor = Math.floor(units);
+    // Match Python's round-to-even behavior at exact half-multiples.
+    return (units - floor === 0.5 ? floor + floor % 2 : Math.round(units)) * multiple;
+  };
+  return {
+    width: roundDimension(Number(ratio[1]) * scale),
+    height: roundDimension(Number(ratio[2]) * scale),
+  };
+}
+
+function connectedDimension(node, name) {
+  let target = node;
+  let slot = node.inputs?.findIndex((input) => input.name === name) ?? -1;
+  const visited = new Set();
+  while (target.graph && slot >= 0) {
+    const link = target.getInputLink?.(slot);
+    if (!link) return undefined;
+    const source = target.graph.getNodeById(link.origin_id);
+    if (!source) return undefined;
+    if (visited.has(source)) throw new Error(`The connected ${name} input contains a reroute cycle.`);
+    visited.add(source);
+    if (source.type === "ResolutionSelector") {
+      return resolutionSelectorSize(source)[link.origin_slot === 0 ? "width" : "height"];
+    }
+    if (source.type === "PrimitiveNode" || source.type === "PrimitiveInt") {
+      return source.widgets?.[0]?.value;
+    }
+    if (source.type !== "Reroute") return Number.isFinite(link.data) ? link.data : undefined;
+    target = source;
+    slot = 0;
+  }
+  return undefined;
+}
+
+function stageDimensions(node) {
+  return Object.fromEntries(["width", "height"].map((name) => [
+    name,
+    Math.max(1, number(connectedDimension(node, name) ?? widget(node, name)?.value, 1024)),
+  ]));
+}
+
 function drawStage(node, canvas, selected = -1) {
   const regions = readRegions(node).map(clampRegion);
-  const width = Math.max(1, number(widget(node, "width")?.value, 1024));
-  const height = Math.max(1, number(widget(node, "height")?.value, 1024));
+  const { width, height } = stageDimensions(node);
   // Preserve the requested image aspect ratio. The old 150-330px height clamp
   // made portrait and panoramic grids look nearly identical even though the
   // resolution label changed. Use layout pixels rather than getBoundingClientRect:
@@ -448,6 +499,32 @@ function drawStage(node, canvas, selected = -1) {
   ctx.fillRect(labelX, 6, labelWidth, 20);
   ctx.fillStyle = "#d8dbe2";
   ctx.fillText(resolution, labelX + 6, 20);
+}
+
+function watchStageSize(node, canvas, redraw) {
+  let previousSize = "";
+  const refresh = () => {
+    const { width, height } = stageDimensions(node);
+    const size = `${width}:${height}:${canvas.offsetWidth}:${window.devicePixelRatio || 1}`;
+    if (size === previousSize) return;
+    previousSize = size;
+    redraw();
+  };
+  const originalDraw = node.onDrawForeground;
+  node.onDrawForeground = function () {
+    const result = originalDraw?.apply(this, arguments);
+    refresh();
+    return result;
+  };
+  const observer = new ResizeObserver(refresh);
+  observer.observe(canvas);
+  const originalRemoved = node.onRemoved;
+  node.onRemoved = function () {
+    observer.disconnect();
+    return originalRemoved?.apply(this, arguments);
+  };
+  refresh();
+  return refresh;
 }
 
 function hookDimensionWidget(node, name, redraw) {
@@ -855,8 +932,9 @@ function attachPanel(node) {
   node.__k2crRoot = root;
   node.__k2crRender = renderRows;
   node.__k2crRenderCanvas = renderCanvasLoras;
-  hookDimensionWidget(node, "width", () => drawStage(node, canvas, selected));
-  hookDimensionWidget(node, "height", () => drawStage(node, canvas, selected));
+  const refreshStage = watchStageSize(node, canvas, () => drawStage(node, canvas, selected));
+  hookDimensionWidget(node, "width", refreshStage);
+  hookDimensionWidget(node, "height", refreshStage);
   renderCanvasLoras();
   renderRows();
   window.requestAnimationFrame(() => {

@@ -12,8 +12,13 @@ class Element {
     this.style = { setProperty() {} };
     this.className = "";
     this.value = "";
+    this.offsetWidth = 480;
+    this.clientWidth = 480;
   }
-  append(...children) { this.children.push(...children); }
+  append(...children) {
+    this.children.push(...children);
+    for (const child of children) if (child instanceof Element) child.parentElement = this;
+  }
   appendChild(child) { this.append(child); return child; }
   replaceChildren(...children) { this.children = children; }
   addEventListener(type, callback) {
@@ -25,6 +30,16 @@ class Element {
     ));
   }
   click() { if (!this.disabled) this.dispatch("click"); }
+  getContext() {
+    this.context ??= {
+      labels: [], draws: 0,
+      scale() {}, clearRect() { this.draws++; }, fillRect() {}, strokeRect() {},
+      beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+      fillText(text) { this.labels.push(text); },
+      measureText(text) { return { width: text.length * 6 }; },
+    };
+    return this.context;
+  }
 }
 
 function elements(root, predicate) {
@@ -43,8 +58,9 @@ function change(input, value) {
   input.dispatch(input.tagName === "select" ? "change" : "input");
 }
 
-function editor(initial = {}) {
+function editor(initial = {}, { realStage = false } = {}) {
   const head = new Element("head");
+  const observers = [];
   const context = vm.createContext({
     console, app: { registerExtension() {} }, api: {},
     document: {
@@ -52,10 +68,15 @@ function editor(initial = {}) {
       getElementById: (id) => head.children.find((element) => element.id === id),
     },
     window: { requestAnimationFrame: (callback) => callback() },
+    ResizeObserver: class {
+      constructor(callback) { this.callback = callback; observers.push(this); }
+      observe(target) { this.target = target; }
+      disconnect() { this.disconnected = true; }
+    },
   });
   const source = readFileSync(join(process.cwd(), "web", "character_router.js"), "utf8");
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, ""), context);
-  context.drawStage = () => {};
+  if (!realStage) context.drawStage = () => {};
   const values = {
     regions_json: JSON.stringify([{ name: "Person", enabled: true, lora: "None", trigger: "PERSON" }]),
     canvas_lora_json: JSON.stringify(initial), scene_prompt: "A city", width: 1024, height: 1024,
@@ -71,7 +92,8 @@ function editor(initial = {}) {
     root, (element) => element.tagName === "button" && element.textContent === text,
   )[0];
   const saved = () => JSON.parse(node.widgets.find((item) => item.name === "canvas_lora_json").value);
-  return { context, node, panels, button, saved };
+  const stage = elements(node.__k2crRoot, (element) => element.tagName === "canvas")[0];
+  return { context, node, panels, button, saved, stage, observers };
 }
 
 test("legacy workflow retains its coverage and + Canvas has no fixed count limit", () => {
@@ -206,4 +228,134 @@ test("invalid imported Canvas does not mutate the existing workflow", async () =
   assert.equal(JSON.stringify(node.widgets.map(({ name, value }) => ({ name, value }))), original);
   assert.equal(alerts.length, 1);
   assert.match(alerts[0], /Could not import scene/);
+});
+
+function connectResolutionSelector(node, ratio = "16:9 (Widescreen)", megapixels = 1, multiple = 8) {
+  const selector = {
+    type: "ResolutionSelector",
+    widgets: [
+      { name: "aspect_ratio", value: ratio },
+      { name: "megapixels", value: megapixels },
+      { name: "multiple", value: multiple },
+    ],
+    outputs: [{ name: "width" }, { name: "height" }],
+  };
+  const links = [{ origin_id: 1, origin_slot: 0 }, { origin_id: 1, origin_slot: 1 }];
+  const sources = new Map([[1, selector]]);
+  node.inputs = [{ name: "width" }, { name: "height" }];
+  node.graph = { getNodeById: (id) => sources.get(id) };
+  node.getInputLink = (slot) => links[slot];
+  return { selector, links, sources };
+}
+
+test("grid resolves connected ResolutionSelector outputs instead of stale 1024 widgets", () => {
+  const { node, stage } = editor({}, { realStage: true });
+  const originalRegions = node.widgets[0].value;
+  connectResolutionSelector(node);
+  node.__k2crRender();
+  assert.equal(stage.context.labels.at(-1), "1368 × 768");
+  assert.equal(stage.style.height, `${480 * 768 / 1368}px`);
+  assert.equal(node.widgets.find((item) => item.name === "width").value, 1024);
+  assert.equal(node.widgets[0].value, originalRegions);
+});
+
+test("grid automatically tracks aspect ratio, megapixels, rounding multiple and disconnection", () => {
+  const { node, stage } = editor({}, { realStage: true });
+  const { selector, links } = connectResolutionSelector(node);
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "1368 × 768");
+  selector.widgets[0].value = "9:16 (Portrait Widescreen)";
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "768 × 1368");
+  selector.widgets[1].value = 2;
+  selector.widgets[2].value = 64;
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "1088 × 1920");
+  const draws = stage.context.draws;
+  node.onDrawForeground();
+  assert.equal(stage.context.draws, draws);
+  links.splice(0, links.length);
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "1024 × 1024");
+});
+
+test("local dimension assignments and editor resizing update without widget callbacks", () => {
+  const { node, stage, observers } = editor({}, { realStage: true });
+  node.widgets.find((item) => item.name === "width").value = 1536;
+  node.widgets.find((item) => item.name === "height").value = 768;
+  node.onDrawForeground();
+  assert.equal(stage.style.height, "240px");
+  stage.offsetWidth = 600;
+  observers[0].callback();
+  assert.equal(stage.style.height, "300px");
+  node.onRemoved();
+  assert.equal(observers[0].disconnected, true);
+});
+
+test("resolution links follow reroutes and honor output slots even when swapped", () => {
+  const { node, stage } = editor({}, { realStage: true });
+  const { links, sources } = connectResolutionSelector(node);
+  const reroute = {
+    type: "Reroute", graph: node.graph,
+    getInputLink: () => ({ origin_id: 1, origin_slot: 1 }),
+  };
+  sources.set(2, reroute);
+  links[0] = { origin_id: 2, origin_slot: 0 };
+  links[1] = { origin_id: 1, origin_slot: 0 };
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "768 × 1368");
+  reroute.getInputLink = () => ({ origin_id: 2, origin_slot: 0 });
+  assert.throws(() => node.onDrawForeground(), /reroute cycle/);
+});
+
+test("numeric primitive links and reconnecting resolution sources update the grid", () => {
+  const { node, stage } = editor({}, { realStage: true });
+  const { links, sources } = connectResolutionSelector(node);
+  sources.set(2, { type: "PrimitiveNode", widgets: [{ value: 1536 }] });
+  sources.set(3, { type: "PrimitiveInt", widgets: [{ name: "value", value: 768 }] });
+  links[0] = { origin_id: 2, origin_slot: 0 };
+  links[1] = { origin_id: 3, origin_slot: 0 };
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "1536 × 768");
+  links[0] = { origin_id: 1, origin_slot: 0, data: 1024 };
+  links[1] = { origin_id: 1, origin_slot: 1, data: 1024 };
+  node.onDrawForeground();
+  assert.equal(stage.context.labels.at(-1), "1368 × 768");
+});
+
+test("selector rounding matches Python at exact half-multiples", () => {
+  const { context, node } = editor();
+  const { selector } = connectResolutionSelector(node, "1:1 (Square)", 1028 ** 2 / 1024 ** 2);
+  assert.equal(context.stageDimensions(node).width, 1024);
+  selector.widgets[1].value = 1036 ** 2 / 1024 ** 2;
+  assert.equal(context.stageDimensions(node).width, 1040);
+});
+
+test("invalid selector settings fail explicitly rather than display a false resolution", () => {
+  const { context, node } = editor();
+  const { selector } = connectResolutionSelector(node);
+  selector.widgets[0].value = "not an aspect ratio";
+  assert.throws(() => context.stageDimensions(node), /invalid resolution settings/);
+});
+
+test("size watcher preserves existing lifecycle hooks and avoids zoom-dependent growth", () => {
+  const { context, stage } = editor({}, { realStage: true });
+  const calls = [];
+  const node = {
+    widgets: [{ name: "width", value: 1536 }, { name: "height", value: 768 }],
+    onDrawForeground(value) { calls.push([this, value]); return "drawn"; },
+    onRemoved(value) { calls.push([this, value]); return "removed"; },
+  };
+  let draws = 0;
+  context.watchStageSize(node, stage, () => { draws++; context.drawStage(node, stage); });
+  for (let index = 0; index < 3; index++) assert.equal(node.onDrawForeground("frame"), "drawn");
+  assert.equal(draws, 1);
+  context.window.devicePixelRatio = 2;
+  node.onDrawForeground("retina");
+  assert.equal(stage.width, 960);
+  assert.equal(stage.height, 480);
+  assert.equal(stage.style.height, "240px");
+  assert.equal(node.onRemoved("cleanup"), "removed");
+  assert.equal(calls.at(-1)[0], node);
+  assert.equal(calls.at(-1)[1], "cleanup");
 });
